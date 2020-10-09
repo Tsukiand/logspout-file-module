@@ -2,15 +2,14 @@ package file
 
 import (
 	"bytes"
-	//"errors"
+	"io/ioutil"
 	"log"
-	//"net"
 	"os"
-	//"reflect"
+	"sort"
+	"strconv"
+	"strings"
 	"text/template"
 	"time"
-	"strconv"
-
 	"github.com/gliderlabs/logspout/router"
 )
 
@@ -40,6 +39,16 @@ func NewFileAdapter(route *router.Route) (router.LogAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// default maxfilecount 10
+	maxfilecount := 10
+	if route.Options["maxfilecount"] != "" {
+		maxcountStr := route.Options["maxfilecount"]
+		maxcount, err := strconv.Atoi(maxcountStr)
+		if err == nil {
+			maxfilecount = maxcount
+		}
+	}
 	
 	// default max size (100Mb)
 	maxfilesize := 1024*1024*100
@@ -58,6 +67,7 @@ func NewFileAdapter(route *router.Route) (router.LogAdapter, error) {
 		filename:  filename,
 		logdir:  logdir,
 		maxfilesize: maxfilesize,
+		maxfilecount: maxfilecount,
 		tmpl:  tmpl,
 	}
 	
@@ -75,6 +85,7 @@ type Adapter struct {
 	logdir  string
 	filesize  int
 	maxfilesize   int
+	maxfilecount int
 	fp  *os.File
 	route *router.Route
 	tmpl  *template.Template
@@ -105,6 +116,40 @@ func (a *Adapter) Stream(logstream chan *router.Message) {
 	}
 }
 
+// PruneLogs removes old log files
+func (a *Adapter) PruneLogs() (err error) {
+	// get listing of directory entries
+	entries, err := ioutil.ReadDir(a.logdir)
+	if err != nil {
+		return err
+	}
+
+	// limit to regular files that contain the appropriate file name
+	files := []os.FileInfo{}
+	for _, entry := range entries {
+		if entry.Mode().IsRegular() && strings.Contains(entry.Name(), a.filename) {
+			files = append(files, entry)
+		}
+	}
+
+	// sort files by modified date
+	sort.Slice(files, func(i, j int) bool { return files[i].ModTime().Before(files[j].ModTime()) })
+
+	// if there are more files than maxfilecount, attempt a prune
+	if len(files) > a.maxfilecount {
+		// grab all but last <maxfilecount> files
+		toPrune := files[0 : len(files)-a.maxfilecount]
+
+		// remove files
+		for _, fi := range toPrune {
+			os.Remove(a.logdir + fi.Name())
+		}
+	}
+
+	return nil
+}
+
+
 // Perform the actual act of rotating and reopening file.
 func (a *Adapter) Rotate() (err error) {
 	// Close existing file if open
@@ -132,5 +177,8 @@ func (a *Adapter) Rotate() (err error) {
         return err
     }
     a.filesize = 0
+
+    a.PruneLogs()
+
     return nil
 }
