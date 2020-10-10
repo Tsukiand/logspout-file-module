@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 	"github.com/gliderlabs/logspout/router"
+	_ "net/http/pprof"
 )
 
 //
